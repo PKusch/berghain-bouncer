@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BERGHAIN — the door decides</title>
+<style>
+  :root {
+    --bg: #0A0A0B; --panel: #141416; --line: #26262A;
+    --ink: #EDEDEA; --mut: #6B6B70;
+    --nein: #E10600; --ja: #38D269;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background:
+      radial-gradient(900px 500px at 70% -10%, #151517 0%, transparent 60%),
+      var(--bg);
+    color: var(--ink);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 1.25rem;
+  }
+  header {
+    width: 100%; max-width: 720px;
+    display: flex; align-items: baseline; gap: 1rem;
+    border-bottom: 1px solid var(--line); padding-bottom: .75rem;
+  }
+  h1 {
+    font-family: Impact, "Arial Narrow", sans-serif;
+    font-size: 2rem; letter-spacing: .14em; font-weight: 400;
+  }
+  .tally { margin-left: auto; font-size: .8rem; color: var(--mut); text-align: right; }
+  .tally b.n { color: var(--nein); } .tally b.j { color: var(--ja); }
+  #status { font-size: .75rem; color: var(--mut); }
+  #status.ok { color: var(--ja); }
+  #status.err { color: var(--nein); }
+
+  .controls {
+    width: 100%; max-width: 720px;
+    display: flex; gap: .5rem; margin: 1rem 0;
+  }
+  input {
+    flex: 1; background: var(--panel); border: 1px solid var(--line);
+    color: var(--ink); padding: .65rem .75rem; font: inherit; border-radius: 4px;
+  }
+  input:focus { outline: 1px solid var(--mut); }
+  button {
+    font-family: Impact, "Arial Narrow", sans-serif;
+    letter-spacing: .1em; font-size: 1rem;
+    background: var(--ink); color: var(--bg); border: none;
+    padding: .65rem 1.4rem; border-radius: 4px; cursor: pointer;
+  }
+  button.on { background: var(--nein); color: var(--ink); }
+  button:disabled { opacity: .4; cursor: default; }
+
+  #log {
+    width: 100%; max-width: 720px; flex: 1; min-height: 0;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    padding: 1rem; overflow-y: auto;
+    display: flex; flex-direction: column; gap: .55rem;
+  }
+  .empty { margin: auto; color: var(--mut); font-size: .85rem; text-align: center; }
+  .msg { font-size: .9rem; line-height: 1.5; max-width: 88%; }
+  .msg .who { font-size: .65rem; letter-spacing: .15em; color: var(--mut); }
+  .msg.u { align-self: flex-end; text-align: right; }
+  .msg.a .who { color: var(--nein); }
+
+  /* the stamp */
+  #stamp {
+    position: fixed; inset: 0; display: none;
+    align-items: center; justify-content: center;
+    background: rgba(0,0,0,.72); z-index: 10; flex-direction: column; gap: .75rem;
+  }
+  #stamp.show { display: flex; }
+  #stamp .word {
+    font-family: Impact, "Arial Narrow", sans-serif;
+    font-size: clamp(4rem, 18vw, 11rem);
+    letter-spacing: .08em; line-height: 1;
+    padding: .5rem 2.5rem;
+    border: .45rem solid currentColor; border-radius: 10px;
+    transform: rotate(-8deg);
+    animation: slam .18s cubic-bezier(.2,2.2,.4,1) both;
+  }
+  #stamp .reason {
+    color: var(--ink); font-size: .9rem; letter-spacing: .1em; text-transform: uppercase;
+  }
+  #stamp.nein .word { color: var(--nein); }
+  #stamp.ja .word { color: var(--ja); }
+  @keyframes slam {
+    from { transform: rotate(-8deg) scale(2.4); opacity: 0; }
+    to   { transform: rotate(-8deg) scale(1); opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) { #stamp .word { animation: none; } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>BERGHAIN</h1>
+  <span id="status">enter key, connect</span>
+  <div class="tally"><b class="n" id="cN">0</b> rejected<br><b class="j" id="cJ">0</b> admitted</div>
+</header>
+
+<div class="controls">
+  <input id="key" type="password" placeholder="AssemblyAI API key" autocomplete="off">
+  <button id="btn">JOIN QUEUE</button>
+</div>
+
+<div id="log"><div class="empty" id="empty">The door is closed.<br>Enter your key and join the queue.</div></div>
+
+<div id="stamp"><div class="word"></div><div class="reason"></div></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const RATE = 24000;
+const SCORE = { ja: 0, nein: 0 };
+
+const SYSTEM_PROMPT =
+  "You are the doorman at the most exclusive techno club in Berlin. " +
+  "People in the queue are trying to convince you to let them in. You decide. " +
+  "Speak in short flat sentences, two at most. Never use exclamation marks. " +
+  "Never apologize. Never explain the rules. Never say great question or happy to help. " +
+  "Ask one or two blunt questions before deciding, for example who they are with, " +
+  "what music they came for, or the last set they heard. " +
+  "Bad signs are big groups, hen parties, asking about table service, mainstream DJs, " +
+  "phones out, and visible enthusiasm. " +
+  "You may switch into German for emphasis, especially the word Nein. " +
+  "When you have decided, call the decide_entry tool with your verdict and a short reason, " +
+  "then state the verdict out loud in one short sentence. " +
+  "Reject almost everyone. Roughly one in five gets in, always for a small strange reason, " +
+  "like correct shoes, correct silence, or naming an acceptable artist without being asked. " +
+  "If someone argues after a rejection, say Nein and nothing else.";
+
+const TOOLS = [{
+  type: "function",
+  name: "decide_entry",
+  description: "Record the final door decision for the current guest. Call exactly once per guest, at the moment you decide.",
+  parameters: {
+    type: "object",
+    properties: {
+      verdict: { type: "string", enum: ["ja", "nein"], description: "ja lets the guest in, nein turns them away." },
+      reason:  { type: "string", description: "Short reason, e.g. 'wrong shoes' or 'correct silence'." }
+    },
+    required: ["verdict", "reason"]
+  }
+}];
+
+// Inline AudioWorklet: mic Float32 -> PCM16 (same pattern as the official quickstart)
+const workletUrl = URL.createObjectURL(new Blob([`
+  class P extends AudioWorkletProcessor {
+    process(inputs) {
+      const ch = inputs[0]?.[0];
+      if (ch) {
+        const buf = new Int16Array(ch.length);
+        for (let i = 0; i < ch.length; i++)
+          buf[i] = Math.max(-32768, Math.min(32767, ch[i] * 32767));
+        this.port.postMessage(buf.buffer, [buf.buffer]);
+      }
+      return true;
+    }
+  }
+  registerProcessor("pcm", P);
+`], { type: "application/javascript" }));
+
+let ws, ctx, mic;
+let nextStartTime = 0;
+const liveSources = new Set();
+
+function playReplyAudio(b64) {
+  const raw = atob(b64);
+  const pcm = new Int16Array(raw.length / 2);
+  for (let i = 0; i < pcm.length; i++)
+    pcm[i] = raw.charCodeAt(i * 2) | (raw.charCodeAt(i * 2 + 1) << 8);
+  const buf = ctx.createBuffer(1, pcm.length, RATE);
+  const chData = buf.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) chData[i] = pcm[i] / 32768;
+  const src = ctx.createBufferSource();
+  src.buffer = buf; src.connect(ctx.destination);
+  const startAt = Math.max(ctx.currentTime, nextStartTime);
+  src.start(startAt);
+  src.onended = () => liveSources.delete(src);
+  liveSources.add(src);
+  nextStartTime = startAt + buf.duration;
+}
+
+function flushPlayback() {
+  for (const s of liveSources) { try { s.onended = null; s.stop(0); s.disconnect(); } catch {} }
+  liveSources.clear();
+  nextStartTime = ctx ? ctx.currentTime : 0;
+}
+
+function stamp(verdict, reason) {
+  SCORE[verdict] = (SCORE[verdict] || 0) + 1;
+  $("cN").textContent = SCORE.nein; $("cJ").textContent = SCORE.ja;
+  const el = $("stamp");
+  el.className = "show " + verdict;
+  el.querySelector(".word").textContent = verdict === "ja" ? "EINTRITT" : "NEIN";
+  el.querySelector(".reason").textContent = reason || "";
+  clearTimeout(stamp._t);
+  stamp._t = setTimeout(() => { el.className = ""; }, 4000);
+}
+
+function addMsg(who, text, cls) {
+  const e = $("empty"); if (e) e.remove();
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  const w = document.createElement("div"); w.className = "who"; w.textContent = who;
+  const t = document.createElement("div"); t.textContent = text;
+  d.append(w, t);
+  $("log").appendChild(d);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+function setStatus(msg, cls) { $("status").textContent = msg; $("status").className = cls || ""; }
+
+$("btn").onclick = () => (ws && ws.readyState <= 1) ? stop() : start();
+
+async function start() {
+  const key = $("key").value.trim();
+  if (!key) return setStatus("enter your API key first", "err");
+  $("btn").disabled = true;
+  setStatus("connecting…");
+
+  try {
+    ctx = new AudioContext({ sampleRate: RATE });
+    await ctx.resume();
+    await ctx.audioWorklet.addModule(workletUrl);
+    mic = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: true }
+    });
+    const source = ctx.createMediaStreamSource(mic);
+    const worklet = new AudioWorkletNode(ctx, "pcm");
+
+    const url = new URL("wss://agents.assemblyai.com/v1/ws");
+    url.searchParams.set("token", key);
+    ws = new WebSocket(url);
+    let ready = false;
+
+    worklet.port.onmessage = ({ data }) => {
+      if (!ready || ws.readyState !== 1) return;
+      const b = new Uint8Array(data);
+      let s = ""; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+      ws.send(JSON.stringify({ type: "input.audio", audio: btoa(s) }));
+    };
+    source.connect(worklet);
+    // Note: worklet is NOT connected to ctx.destination — no mic monitoring/echo.
+
+    ws.onopen = () => ws.send(JSON.stringify({
+      type: "session.update",
+      session: {
+        system_prompt: SYSTEM_PROMPT,
+        greeting: "Ja. Next.",
+        input: {
+          keyterms: ["Berghain", "techno", "guest list", "Panorama Bar",
+                     "Keinemusik", "Black Coffee", "Maceo Plex", "Tresor"],
+          turn_detection: {
+            vad_threshold: 0.75,   // loud-room setting; lower toward 0.5 in quiet
+            min_silence: 900,
+            max_silence: 3000,
+            interrupt_response: true
+          }
+        },
+        output: { voice: "lukas" },
+        tools: TOOLS
+      }
+    }));
+
+    ws.onmessage = ({ data }) => {
+      const m = JSON.parse(data);
+      switch (m.type) {
+        case "session.ready":
+          ready = true;
+          setStatus("you are at the front of the queue. speak.", "ok");
+          $("btn").disabled = false;
+          $("btn").textContent = "LEAVE QUEUE";
+          $("btn").classList.add("on");
+          break;
+        case "reply.audio":
+          playReplyAudio(m.data);   // audio lives in 'data' on output events
+          break;
+        case "reply.done":
+          if (m.status === "interrupted") flushPlayback();
+          break;
+        case "transcript.user":
+          addMsg("YOU", m.text, "u"); break;
+        case "transcript.agent":
+          addMsg("DOORMAN", m.text, "a"); break;
+        case "tool.call":
+          if (m.name === "decide_entry") {
+            const a = m.arguments || {};
+            stamp(a.verdict === "ja" ? "ja" : "nein", a.reason);
+            ws.send(JSON.stringify({
+              type: "tool.result",
+              call_id: m.call_id,
+              result: JSON.stringify({ recorded: true })  // string, not object
+            }));
+          }
+          break;
+        case "session.error":
+          setStatus("error: " + (m.message || "unknown"), "err"); break;
+      }
+    };
+
+    ws.onclose = () => { setStatus("the door is closed"); resetUI(); };
+    ws.onerror = () => { setStatus("connection failed — check the key", "err"); resetUI(); };
+  } catch (e) {
+    setStatus(e.message, "err"); resetUI();
+  }
+}
+
+function stop() {
+  // session.end short-circuits the 30s billable resume window.
+  try { ws?.send(JSON.stringify({ type: "session.end" })); } catch {}
+  ws?.close();
+  mic?.getTracks().forEach(t => t.stop());
+  ctx?.close();
+  ws = ctx = mic = null;
+  flushPlayback?.call ? null : null;
+  resetUI(); setStatus("the door is closed");
+}
+
+function resetUI() {
+  $("btn").disabled = false;
+  $("btn").textContent = "JOIN QUEUE";
+  $("btn").classList.remove("on");
+}
+</script>
+</body>
+</html>
