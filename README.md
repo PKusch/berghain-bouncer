@@ -21,8 +21,8 @@ just talk — it acts.
 ## Run it
 
 1. Get an API key at [assemblyai.com](https://www.assemblyai.com/dashboard/api-keys)
-2. Download `bouncer.html` and serve it locally:
-   `python3 -m http.server 3000`
+2. Clone the repo and serve it locally:
+   `git clone https://github.com/PKusch/berghain-bouncer && cd berghain-bouncer && python3 -m http.server 3000`
 3. Open `http://localhost:3000/bouncer.html`, paste your key, **JOIN QUEUE**,
    allow the mic, and start pleading.
 
